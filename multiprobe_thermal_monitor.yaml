@@ -1,0 +1,260 @@
+# Flagship — firmware principale (ESP32-S3 Super Mini + 3 sonde di
+# temperatura + pubblicazione MQTT verso Home Assistant).
+#
+# LOGICA: ogni ${sample_interval} le 3 sonde DS18B20 vengono lette nello
+# stesso ciclo. Ogni ${window_size} campioni viene pubblicata su MQTT la
+# MEDIANA della finestra — quindi una pubblicazione ogni
+# sample_interval × window_size. Home Assistant scopre le entità da solo via
+# MQTT discovery (nessuna entità da dichiarare a mano nel suo
+# configuration.yaml).
+#
+# Perché la mediana e non la media: il filtro non serve a migliorare
+# l'accuratezza (i ±0.5 °C della DS18B20 sono errore sistematico di
+# calibrazione, mediare non li tocca), serve a scartare le letture sballate
+# che un bus 1-Wire disturbato può produrre. Un singolo campione spazzatura
+# non sposta la mediana, mentre trascinerebbe la media.
+#
+# Cablaggio: DOCS/wiring.yaml (WireViz). Ogni sonda ha il proprio bus 1-Wire
+# su un GPIO dedicato, con la propria resistenza di pull-up da 4.7 kOhm verso
+# 3V3; alimentazione (3V3 e GND) condivisa dalle tre. Con un solo device per
+# bus gli indirizzi a 64 bit delle DS18B20 non servono: ESPHome li
+# auto-seleziona. L'associazione sonda/entità la decide il pin.
+#
+# Varianti di sviluppo/test: vedi bench/ (vuota per ora).
+
+substitutions:
+  device_name: multiprobe-thermal-monitor
+
+  # Campionamento e pubblicazione.
+  #
+  # sample_interval = ogni quanto si legge una sonda (NON quanto si
+  # pubblica). Limite fisico: a 12 bit la conversione della DS18B20 dura
+  # 750 ms, quindi sotto ~1s non si può scendere. E non solo: ESPHome
+  # programma la lettura con set_timeout(nome_sensore, ...) e un timeout
+  # con lo stesso nome CANCELLA quello pendente, quindi con un intervallo
+  # più corto della conversione la lettura non arriverebbe MAI e il
+  # sensore non pubblicherebbe nulla (non "meno spesso": nulla).
+  #
+  # window_size = quanti campioni entrano nella mediana. La pubblicazione
+  # avviene ogni sample_interval × window_size, cioè 30s con questi valori:
+  # la temperatura è una grandezza lenta, pubblicare più spesso
+  # genererebbe solo traffico MQTT e storico HA senza informazione in più.
+  sample_interval: 3s
+  window_size: "10"
+
+  # Un bus 1-Wire DEDICATO per ogni sonda, invece di un unico bus condiviso.
+  # Ogni bus vuole la sua resistenza di pull-up da 4.7 kOhm verso 3V3.
+  # Pin adiacenti sull'header della Super Mini, tutti liberi e nessuno di
+  # strapping (GPIO3 lo e', per questo si parte da GPIO4).
+  probe_1_pin: GPIO4
+  probe_2_pin: GPIO5
+  probe_3_pin: GPIO6
+
+  # LED RGB onboard WS2812 (condiviso col LED rosso della scheda). Pin
+  # confermato sulla Super Mini, vedi ../esp32-S3-from-china. Lo pilota il
+  # modulino common/status_led.yaml come indicatore di stato.
+  rgb_led_pin: GPIO48
+
+  # Heartbeat molto tenue: sta acceso in una stanza h24, deve confermare che
+  # la scheda e' viva senza fare da lucina notturna. Gli avvisi invece
+  # devono farsi notare.
+  led_brightness_ok: "8%"
+  led_brightness_alert: "40%"
+
+# Indicatore di stato sul LED RGB onboard. Codice colore, precedenza e
+# limiti sono documentati in testa al modulino.
+# Il contratto e' il global led_fault (bool). WiFi e MQTT li rileva il
+# modulo da solo; qui sotto, nel blocco interval, si decide solo cio' che il
+# modulo non puo' sapere: se una sonda e' muta.
+packages:
+  status_led: !include
+    file: common/status_led.yaml
+    vars:
+      led_id: onboard_led
+      led_pin: ${rgb_led_pin}
+      led_brightness_ok: ${led_brightness_ok}
+      led_brightness_alert: ${led_brightness_alert}
+
+esphome:
+  name: ${device_name}
+  friendly_name: "Multiprobe Thermal Monitor"
+
+# Scheda: ESP32-S3 "Super Mini" di importazione, caratterizzata con esptool
+# nel repo ../esp32-S3-from-china (QFN56 rev v0.2, 4MB flash XMC, 2MB PSRAM
+# quad, USB nativo USB-Serial/JTAG senza bridge UART esterno).
+# PSRAM non dichiarata di proposito: qui non serve a nulla e costa RAM
+# interna per il mapping.
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+
+# USB_SERIAL_JTAG obbligatorio su questa board: non c'è bridge UART, senza
+# questa riga i log non escono da nessuna parte.
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Se il WiFi non è raggiungibile la board espone una rete propria da cui
+  # riconfigurarla, invece di restare irraggiungibile.
+  ap:
+    # Non "${device_name}-fallback": un SSID può essere al massimo 32
+    # caratteri e il nome completo sfora.
+    ssid: "thermal-monitor-fallback"
+
+captive_portal:
+
+ota:
+  - platform: esphome
+
+# Trasporto scelto: MQTT (non l'API nativa ESPHome). Home Assistant riceve
+# le entità via MQTT discovery, quindi serve il broker + l'integrazione MQTT
+# configurata in HA.
+#
+# NOTA: senza il blocco `api:` la dashboard ESPHome non può mostrare i log
+# via rete (restano disponibili via USB e sul topic .../debug) e HA non usa
+# l'integrazione nativa ESPHome. È una conseguenza voluta della scelta MQTT,
+# non una dimenticanza: api: e mqtt: possono coesistere, se in futuro serve.
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  # discovery: true e discovery_prefix: homeassistant sono i default —
+  # lasciati impliciti apposta per non duplicare valori già corretti.
+  #
+  # birth/will message di default pubblicano online/offline su
+  # ${device_name}/status: è ciò che rende le entità "non disponibili" in HA
+  # quando la board si stacca, invece di mostrare l'ultimo valore per sempre.
+
+# Un bus 1-Wire dedicato per sonda, invece di un unico bus condiviso da
+# tutte e tre. Costa due GPIO e due resistenze in piu' (ne abbiamo 13
+# liberi), e in cambio:
+#
+#   - NIENTE indirizzi a 64 bit da ricavare dai log e incollare qui: con un
+#     solo device sul bus, OneWireDevice::check_address_() lo auto-seleziona
+#     (one_wire.cpp:22-35). Con piu' device sarebbe obbligatorio dichiararli.
+#   - Sostituire una sonda guasta diventa un'operazione puramente fisica:
+#     stacchi e attacchi. Con gli indirizzi servirebbe rileggere i log e
+#     riflashare.
+#   - L'associazione sonda/entita' e' fissata dal CABLAGGIO, non da un numero
+#     a 64 bit: "Sonda 2 = GPIO5" si verifica guardando la scheda.
+#   - Un guasto isola: una sonda che tiene la linea dati bassa azzera solo il
+#     proprio bus. Sul bus condiviso avrebbe fatto sparire tutte e tre.
+#   - Ogni tratta e' punto-punto, quindi il problema della topologia a stella
+#     (riflessioni, CRC errati) semplicemente non si pone.
+one_wire:
+  - platform: gpio
+    id: probe_1_bus
+    pin: ${probe_1_pin}
+
+  - platform: gpio
+    id: probe_2_bus
+    pin: ${probe_2_pin}
+
+  - platform: gpio
+    id: probe_3_bus
+    pin: ${probe_3_pin}
+
+# Diagnostica minima: dice se la board è viva e come sta la connessione.
+# Su questa scheda l'RSSI merita attenzione — girano esemplari con l'antenna
+# montata al contrario, che si manifestano proprio come segnale pessimo a
+# distanza ravvicinata.
+sensor:
+  - platform: wifi_signal
+    name: "WiFi signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+
+  # ---------------------------------------------------------------------
+  # SONDE
+  # ---------------------------------------------------------------------
+  # Ogni sonda sta sul proprio bus (one_wire_id), quindi NON serve dichiarare
+  # l'indirizzo: essendo l'unico device sul bus, viene auto-selezionato.
+  # L'associazione sonda/entita' la decide il pin a cui l'hai collegata.
+  #
+  # Le 3 sonde condividono lo stesso update_interval, quindi ESPHome le
+  # aggiorna nello stesso ciclo. Qui i bus sono indipendenti, quindi le tre
+  # conversioni sono davvero parallele (non si contendono la linea) e anche
+  # le finestre della mediana restano allineate: le tre temperature
+  # pubblicate si riferiscono sempre allo stesso intervallo di tempo.
+  #
+  # Se una sonda non compare nei log, il problema e' nel cablaggio di QUELLA
+  # tratta (pull-up assente sul suo pin, massa, o sonda guasta) — le altre
+  # due continuano a funzionare, ed e' proprio il vantaggio dei bus separati.
+  - platform: dallas_temp
+    id: sonda_1
+    one_wire_id: probe_1_bus
+    name: "Sonda 1"
+    update_interval: ${sample_interval}
+    # 12 bit = 0.0625 °C di risoluzione, 750 ms di conversione. Il tempo di
+    # conversione resta abbondantemente dentro sample_interval (3s).
+    resolution: 12
+    filters:
+      # send_first_at uguale a window_size: la prima pubblicazione avviene
+      # solo a finestra piena. In cambio di ~30s di attesa dopo il boot, il
+      # primo valore che HA registra e' gia' filtrato come tutti gli altri,
+      # invece di essere una lettura singola indistinguibile dalle
+      # successive nello storico.
+      - median:
+          window_size: ${window_size}
+          send_every: ${window_size}
+          send_first_at: ${window_size}
+
+  - platform: dallas_temp
+    id: sonda_2
+    one_wire_id: probe_2_bus
+    name: "Sonda 2"
+    update_interval: ${sample_interval}
+    resolution: 12
+    filters:
+      - median:
+          window_size: ${window_size}
+          send_every: ${window_size}
+          send_first_at: ${window_size}
+
+  - platform: dallas_temp
+    id: sonda_3
+    one_wire_id: probe_3_bus
+    name: "Sonda 3"
+    update_interval: ${sample_interval}
+    resolution: 12
+    filters:
+      - median:
+          window_size: ${window_size}
+          send_every: ${window_size}
+          send_first_at: ${window_size}
+  # ---------------------------------------------------------------------
+
+text_sensor:
+  - platform: version
+    name: "ESPHome version"
+
+
+# Alza il flag di guasto che il modulino LED traduce in rosso lampeggiante.
+# E' l'unico punto in cui questo firmware decide COSA sia un guasto: il
+# modulino non sa nulla di sonde (e non gli serve, il rosso dice CHE
+# qualcosa non va, non cosa — il dettaglio sta nei log e in HA).
+#
+# Perche' has_state() e non solo isnan(): prima della prima pubblicazione lo
+# stato di un sensore E' NaN. Senza la guardia, per i primi 30s dopo ogni
+# boot il LED segnalerebbe un guasto su un impianto perfettamente sano.
+#
+# Cosa fa scattare davvero l'avviso: il filtro median scarta i NaN dalla
+# finestra e pubblica NaN solo se TUTTI e 10 i campioni lo sono
+# (filter.cpp:51-57). Quindi il LED non si accende per un glitch occasionale
+# sul bus, ma solo per una sonda muta per l'intera finestra — che e'
+# esattamente la condizione che vale la pena segnalare.
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          id(led_fault) =
+              (id(sonda_1).has_state() && isnan(id(sonda_1).state)) ||
+              (id(sonda_2).has_state() && isnan(id(sonda_2).state)) ||
+              (id(sonda_3).has_state() && isnan(id(sonda_3).state));

@@ -1,0 +1,135 @@
+# Modulino di stato su LED RGB onboard.
+#
+# Codice colore deliberatamente BINARIO: due soli stati, leggibili a colpo
+# d'occhio senza doversi ricordare una legenda.
+#
+#   bianco, lampeggio lento    tutto ok
+#   rosso, lampeggio veloce    qualcosa non va
+#   spento del tutto           scheda senza alimentazione o firmware bloccato
+#
+# L'informazione sta nella VELOCITA' prima ancora che nel colore: bianco
+# lento e rosso veloce si distinguono con la coda dell'occhio, e restano
+# distinguibili anche per chi confonde i colori. Un codice a piu' colori
+# direbbe di piu', ma va ricordato — e un indicatore che va interpretato
+# non si guarda passando.
+#
+# Il lampeggio lento quando tutto va bene non e' decorativo: e' cio' che
+# rende NON ambiguo il terzo caso. Senza, "LED spento" significherebbe sia
+# "tutto bene" sia "scheda morta", che e' il guasto piu' importante da
+# notare.
+#
+# PERCHE' UN LED DI STATO HA SENSO QUI: segnala i guasti che non si possono
+# vedere in nessun altro modo. Se Home Assistant riceve i dati, i problemi
+# si vedono li'. Il LED serve esattamente quando i dati NON arrivano, cioe'
+# quando e' rotto il canale che te lo avrebbe detto.
+#
+# COSA ACCENDE IL ROSSO
+#   - WiFi non connesso            (rilevato dal modulo)
+#   - broker MQTT irraggiungibile  (rilevato dal modulo)
+#   - global `led_fault` a true    (lo alza il firmware che include il
+#                                   modulo: il modulo non sa nulla del
+#                                   dominio applicativo)
+#
+# Il rosso dice CHE qualcosa non va, non cosa: il dettaglio sta nei log e in
+# Home Assistant. E' una scelta, non una limitazione — vedi sopra.
+#
+# LIMITI NOTI
+#   - il LED diventa `internal`, quindi NON e' piu' una luce controllabile
+#     da Home Assistant. Non puo' fare entrambe le cose: se HA lo accendesse
+#     starebbe sovrascrivendo un avviso
+#   - richiede il componente `mqtt:`. In un progetto che usa `api:` invece
+#     di MQTT va tolta la condizione mqtt.connected, altrimenti non valida
+#
+# USO (dal firmware che lo include):
+#
+#   packages:
+#     status_led: !include
+#       file: common/status_led.yaml
+#       vars:
+#         led_id: onboard_led
+#         led_pin: GPIO48
+#         led_brightness_ok: "8%"
+#         led_brightness_alert: "40%"
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: ${led_id}
+    # internal: non esposto come entita' luce in Home Assistant. Il suo
+    # lavoro ora e' segnalare stato, e due padroni sullo stesso LED
+    # significherebbero avvisi sovrascritti senza accorgersene.
+    internal: true
+    pin: ${led_pin}
+    num_leds: 1
+    chipset: ws2812
+    rgb_order: GRB
+    restore_mode: ALWAYS_OFF
+    # 0s obbligatorio: con la transizione di default (1s) i lampeggi da
+    # 150 ms si trasformerebbero in una dissolvenza continua e la
+    # distinzione lento/veloce — che qui porta l'informazione — sparirebbe.
+    default_transition_length: 0s
+
+globals:
+  - id: led_fault
+    type: bool
+    initial_value: 'false'
+    # Guasto applicativo. Lo alza il firmware che include il modulo, non il
+    # modulo stesso. WiFi e MQTT sono gia' coperti dal modulo: qui va solo
+    # cio' che il modulo non puo' sapere.
+
+esphome:
+  on_boot:
+    # priority negativa = in fondo alla sequenza di avvio, quando luce e
+    # componenti di rete sono gia' inizializzati.
+    priority: -100
+    then:
+      - script.execute: status_led_loop
+
+script:
+  - id: status_led_loop
+    # single: il loop parte una volta sola al boot e non termina mai. Non
+    # va rilanciato da un interval, perche' ESPHome logga un warning a ogni
+    # tentativo di eseguire uno script single gia' in esecuzione.
+    mode: single
+    then:
+      - while:
+          condition:
+            lambda: 'return true;'
+          then:
+            # Ogni iterazione disegna UN lampeggio completo e poi rivaluta:
+            # un cambiamento di stato viene raccolto entro un ciclo, senza
+            # contatori ne' macchine a stati. In errore il ciclo dura 300 ms,
+            # quindi il ritorno alla normalita' si vede subito; da ok
+            # all'errore passano al massimo ~2s.
+            - if:
+                condition:
+                  or:
+                    - not:
+                        wifi.connected:
+                    - not:
+                        mqtt.connected:
+                    - lambda: 'return id(led_fault);'
+                then:
+                  - light.turn_on:
+                      id: ${led_id}
+                      red: 100%
+                      green: 0%
+                      blue: 0%
+                      brightness: ${led_brightness_alert}
+                  - delay: 150ms
+                  - light.turn_off:
+                      id: ${led_id}
+                  - delay: 150ms
+                else:
+                  # Lampeggio breve e tenue: sta acceso in una stanza h24,
+                  # deve confermare che la scheda e' viva senza fare da
+                  # lucina notturna.
+                  - light.turn_on:
+                      id: ${led_id}
+                      red: 100%
+                      green: 100%
+                      blue: 100%
+                      brightness: ${led_brightness_ok}
+                  - delay: 100ms
+                  - light.turn_off:
+                      id: ${led_id}
+                  - delay: 2s

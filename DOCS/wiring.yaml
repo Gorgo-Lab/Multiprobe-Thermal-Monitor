@@ -1,0 +1,249 @@
+metadata:
+  title: Multiprobe Thermal Monitor — Wiring di riferimento (3 DS18B20, un bus 1-Wire per sonda)
+  description: >
+    Topologia del flagship: tre sonde DS18B20 waterproof, ognuna sul PROPRIO
+    bus 1-Wire attestato su un GPIO dedicato dell'ESP32-S3 Super Mini
+    (GPIO4, GPIO5, GPIO6 — vedi multiprobe_thermal_monitor.yaml,
+    substitutions probe_N_pin), ognuna con la propria resistenza di pull-up
+    da 4.7 kOhm verso 3V3. Alimentazione delle sonde (3V3 e GND) condivisa,
+    modalita normale a 3 fili (NON parassita).
+    Scelta deliberata contro il bus unico condiviso da tutte e tre: con un
+    solo device per bus gli indirizzi a 64 bit delle DS18B20 non servono
+    (ESPHome li auto-seleziona), sostituire una sonda guasta diventa
+    un'operazione puramente fisica senza riflashare, un guasto su una sonda
+    non porta giu le altre due, e ogni tratta e punto-punto invece che a
+    stella — quindi il problema delle riflessioni sul bus non si pone.
+    Costa due GPIO e due resistenze in piu, su una scheda che ha 13 pin
+    liberi.
+    Le tre tratte sonda e i pull-up sono attestati su una morsettiera vicino
+    alla scheda: e li che il cablaggio si ricompone, ed e il punto da cui si
+    stacca una sonda per sostituirla.
+    Alimentazione: caricatore USB da rete (5V, 1A minimo) collegato alla
+    porta USB-C della scheda. Scelta deliberata invece di un alimentatore
+    5V cablato dentro la scatola: la 220V resta confinata nel guscio
+    certificato del caricatore, fuori dalla scatola, quindi nessun
+    conduttore di rete da cablare a mano. Sul rail 5V c'e un gruppo di
+    disaccoppiamento locale per assorbire i picchi di corrente della radio
+    WiFi.
+  avvertenze: >
+    Un pull-up da 4.7 kOhm PER OGNI BUS, cioe tre in totale, uno per ogni
+    linea dati: non sono in parallelo fra loro, ognuno serve il proprio bus.
+    Metterne uno solo condiviso lascerebbe due linee dati flottanti.
+    Le sonde sono alimentate a 3.3V, NON a 5V: la linea dati arriva
+    direttamente a un GPIO dell'ESP32, che non e 5V-tolerant.
+    Modalita parassita (VDD a massa, alimentazione dal solo bus dati)
+    volutamente NON usata: e piu fragile e non aggiunge nulla, avendo gia un
+    filo libero nel cavo delle sonde.
+    I colori dei fili delle sonde (rosso/giallo/nero) sono quelli piu
+    diffusi ma NON standardizzati: verificare sul modello effettivo prima di
+    collegare, invertire VDD e GND distrugge la sonda.
+    Quale sonda finisce su quale entita in Home Assistant lo decide IL PIN:
+    GPIO4 = Sonda 1, GPIO5 = Sonda 2, GPIO6 = Sonda 3. Scambiare due tratte
+    sulla morsettiera scambia le due entita, senza che nulla lo segnali.
+    Etichettare i cavi.
+    ALIMENTAZIONE: usare un cavo USB CORTO (max 1 m) o marcato per 3A. I
+    cavi lunghi con conduttori di potenza sottili (AWG28) fanno cadere
+    abbastanza tensione sui picchi WiFi da far scattare il brownout
+    detector: il sintomo sono reset apparentemente casuali, che nessuno
+    attribuisce al cavo. Il connettore USB-C della scheda e saldato in
+    superficie e si stacca dal PCB se il cavo viene tirato: fascettare il
+    cavo alla scatola, cosi lo strappo non arriva mai al connettore. MAI
+    alimentare contemporaneamente da USB e dal pin 5V dell'header: sono lo
+    stesso rail, due sorgenti in parallelo. Rispettare la polarita del
+    condensatore elettrolitico: montato al contrario esplode.
+
+connectors:
+  ESP32:
+    type: ESP32-S3 Super Mini
+    subtype: alimentato via USB-C da caricatore di rete
+    pinlabels: [GND, GPIO4, GPIO5, GPIO6, '3V3', '5V']
+    notes: 'GPIO4/5/6 = tre linee dati 1-Wire indipendenti, una per sonda. Pin adiacenti sull header, tutti liberi e nessuno di strapping (GPIO3 lo e, per questo si parte da GPIO4). Il pin 5V e lo STESSO rail del VBUS dell USB-C: qui non alimenta, serve solo come punto di attacco del disaccoppiamento'
+
+  MORSETTIERA:
+    type: Morsettiera di attestazione
+    subtype: 5 posizioni, vicino alla scheda
+    pinlabels: [GND, DQ1, DQ2, DQ3, '3V3']
+    notes: 'Punto in cui si ricompone il cablaggio: qui arrivano i 5 conduttori dalla scheda, le tre tratte sonda e le sei gambe dei pull-up. GND e 3V3 raccolgono piu conduttori ciascuno (sono i rail condivisi), DQ1/2/3 restano separati. E il punto da cui si stacca una sonda per sostituirla'
+
+  R_PULLUP_1: &pullup
+    type: Resistenza di pull-up
+    subtype: 4.7 kOhm 1/4W
+    pinlabels: [A, B]
+    notes: 'UNA PER BUS: tra la propria linea dati e 3V3. Montata sulla morsettiera, non sulla sonda'
+
+  R_PULLUP_2:
+    <<: *pullup
+
+  R_PULLUP_3:
+    <<: *pullup
+
+  SONDA_1: &sonda_ds18b20
+    type: Sonda DS18B20 waterproof
+    subtype: cavo a 3 fili, sonda in acciaio inox
+    pinlabels: [GND, DQ, VDD]
+    notes: 'Colori tipici del cavo: nero GND, giallo DQ, rosso VDD — NON standardizzati, verificare sul modello reale. Nessun indirizzo da configurare: essendo sola sul proprio bus, ESPHome la auto-seleziona'
+
+  SONDA_2:
+    <<: *sonda_ds18b20
+    notes: 'Stesso cablaggio della sonda 1, su DQ2. Nessun indirizzo da configurare'
+
+  SONDA_3:
+    <<: *sonda_ds18b20
+    notes: 'Stesso cablaggio della sonda 1, su DQ3. Nessun indirizzo da configurare'
+
+  CARICATORE:
+    type: Caricatore USB da rete
+    subtype: '5V, 1A minimo — qualunque caricatore da telefono decente'
+    pinlabels: ['VBUS', GND]
+    notes: 'La 220V resta dentro il guscio certificato del caricatore, FUORI dalla scatola: nessun conduttore di rete da cablare a mano. Un caricatore USB-C PD va bene: eroga 5V di default e sale solo se il dispositivo negozia, cosa che l ESP32 non fa'
+
+  DISACCOPPIAMENTO:
+    type: Gruppo di disaccoppiamento
+    subtype: '100 uF elettrolitico low-ESR + 100 nF ceramico, in parallelo'
+    pinlabels: ['+', '-']
+    notes: 'Da montare SUI PIN della scheda con gambe corte, non a meta cavo: serve ad assorbire localmente i picchi da 350-500 mA della radio WiFi, che l alimentatore non riesce a servire attraverso il cavo. Rispettare la polarita dell elettrolitico. Il ceramico va in parallelo, non ha polarita'
+
+cables:
+  W1:
+    wirecount: 5
+    gauge: 0.25 mm2
+    colors: [BK, YE, GN, BU, RD]
+    notes: 'ESP32 → morsettiera: massa, le tre linee dati indipendenti (una per sonda) e 3V3. Colori diversi sulle tre linee dati apposta, per non scambiarle in fase di attestazione'
+
+  W2:
+    wirecount: 1
+    gauge: 0.25 mm2
+    colors: [YE]
+    notes: 'Morsettiera DQ1 → pull-up 1 gamba A'
+
+  W3:
+    wirecount: 1
+    gauge: 0.25 mm2
+    colors: [RD]
+    notes: 'Pull-up 1 gamba B → morsettiera 3V3: chiude il pull-up del bus della sonda 1'
+
+  W4:
+    wirecount: 1
+    gauge: 0.25 mm2
+    colors: [GN]
+    notes: 'Morsettiera DQ2 → pull-up 2 gamba A'
+
+  W5:
+    wirecount: 1
+    gauge: 0.25 mm2
+    colors: [RD]
+    notes: 'Pull-up 2 gamba B → morsettiera 3V3: chiude il pull-up del bus della sonda 2'
+
+  W6:
+    wirecount: 1
+    gauge: 0.25 mm2
+    colors: [BU]
+    notes: 'Morsettiera DQ3 → pull-up 3 gamba A'
+
+  W7:
+    wirecount: 1
+    gauge: 0.25 mm2
+    colors: [RD]
+    notes: 'Pull-up 3 gamba B → morsettiera 3V3: chiude il pull-up del bus della sonda 3'
+
+  W8:
+    wirecount: 3
+    gauge: 0.25 mm2
+    colors: [BK, YE, RD]
+    notes: 'Morsettiera → Sonda 1: cavo integrato della sonda, linea dati su DQ1 (GPIO4)'
+
+  W9:
+    wirecount: 3
+    gauge: 0.25 mm2
+    colors: [BK, YE, RD]
+    notes: 'Morsettiera → Sonda 2: cavo integrato della sonda, linea dati su DQ2 (GPIO5)'
+
+  W10:
+    wirecount: 3
+    gauge: 0.25 mm2
+    colors: [BK, YE, RD]
+    notes: 'Morsettiera → Sonda 3: cavo integrato della sonda, linea dati su DQ3 (GPIO6)'
+
+  W11:
+    wirecount: 2
+    gauge: 0.5 mm2
+    colors: [RD, BK]
+    notes: 'Caricatore → ESP32: cavo USB, CORTO (max 1 m) o marcato 3A. Arriva fisicamente sulla presa USB-C della scheda, non sui pin dell header — elettricamente e lo stesso rail'
+
+  W12:
+    wirecount: 1
+    gauge: 0.5 mm2
+    colors: [RD]
+    notes: 'ESP32 5V → disaccoppiamento (+): gamba corta, il piu vicino possibile al pin'
+
+  W13:
+    wirecount: 1
+    gauge: 0.5 mm2
+    colors: [BK]
+    notes: 'ESP32 GND → disaccoppiamento (-): gamba corta, il piu vicino possibile al pin'
+
+connections:
+  -
+    - ESP32: [GND, GPIO4, GPIO5, GPIO6, '3V3']
+    - W1: [1-5]
+    - MORSETTIERA: [GND, DQ1, DQ2, DQ3, '3V3']
+
+  -
+    - MORSETTIERA: [DQ1]
+    - W2: [1]
+    - R_PULLUP_1: [A]
+
+  -
+    - R_PULLUP_1: [B]
+    - W3: [1]
+    - MORSETTIERA: ['3V3']
+
+  -
+    - MORSETTIERA: [DQ2]
+    - W4: [1]
+    - R_PULLUP_2: [A]
+
+  -
+    - R_PULLUP_2: [B]
+    - W5: [1]
+    - MORSETTIERA: ['3V3']
+
+  -
+    - MORSETTIERA: [DQ3]
+    - W6: [1]
+    - R_PULLUP_3: [A]
+
+  -
+    - R_PULLUP_3: [B]
+    - W7: [1]
+    - MORSETTIERA: ['3V3']
+
+  -
+    - MORSETTIERA: [GND, DQ1, '3V3']
+    - W8: [1-3]
+    - SONDA_1: [GND, DQ, VDD]
+
+  -
+    - MORSETTIERA: [GND, DQ2, '3V3']
+    - W9: [1-3]
+    - SONDA_2: [GND, DQ, VDD]
+
+  -
+    - MORSETTIERA: [GND, DQ3, '3V3']
+    - W10: [1-3]
+    - SONDA_3: [GND, DQ, VDD]
+
+  -
+    - CARICATORE: ['VBUS', GND]
+    - W11: [1-2]
+    - ESP32: ['5V', GND]
+
+  -
+    - ESP32: ['5V']
+    - W12: [1]
+    - DISACCOPPIAMENTO: ['+']
+
+  -
+    - ESP32: [GND]
+    - W13: [1]
+    - DISACCOPPIAMENTO: ['-']

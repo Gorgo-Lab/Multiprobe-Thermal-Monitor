@@ -1,0 +1,13 @@
+[project]
+name = "multiprobe-thermal-monitor"
+version = "0.1.0"
+description = "Firmware ESPHome per ESP32-S3 Super Mini: lettura simultanea di 3 sonde di temperatura e pubblicazione MQTT verso Home Assistant"
+readme = "README.md"
+requires-python = ">=3.10.12"
+dependencies = [
+    "esphome>=2025.7.5",
+    # PlatformIO (invocato da esphome per il build del firmware) richiama
+    # "python -m pip" per controllare le dipendenze installate: i venv creati
+    # da uv non includono pip di default, va dichiarato qui.
+    "pip",
+]
