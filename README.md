@@ -15,7 +15,7 @@ Firmware [ESPHome](https://esphome.io) per **ESP32-S3 Super Mini** che legge **3
 
 ### Modalità debug
 
-Con un ponticello tra `GPIO7` e `GND` inserito all'avvio, la scheda parte in modalità debug. La logica è la stessa, cambiano solo i tempi:
+Con un ponticello tra `GPIO13` e `GND` inserito all'avvio, la scheda parte in modalità debug. La logica è la stessa, cambiano solo i tempi:
 
 | | Normale | Debug |
 |---|---|---|
@@ -58,15 +58,16 @@ Il contatore delle letture fallite conta gli errori che la mediana nasconde, e s
 | Resistenza 4.7 kΩ ¼ W | 3 | un pull-up per sonda |
 | Condensatore elettrolitico 100 µF | 1 | ≥ 10 V, tra `5V` e `GND` |
 | Caricatore USB | 1 | 5 V, almeno 1 A |
-| Header 2 pin + jumper | 1 | ponticello debug su `GPIO7` |
+| Header 2 pin + jumper | 1 | ponticello debug su `GPIO13` |
 
 Collegamenti:
 
-| Sonda | Pin dati | Entità |
+| Collegamento | Pin | Funzione |
 |---|---|---|
-| 1 | `GPIO4` | Sonda 1 |
-| 2 | `GPIO5` | Sonda 2 |
-| 3 | `GPIO6` | Sonda 3 |
+| Sonda 1 (DQ) | `GPIO4` | entità Sonda 1 |
+| Sonda 2 (DQ) | `GPIO5` | entità Sonda 2 |
+| Sonda 3 (DQ) | `GPIO6` | entità Sonda 3 |
+| Ponticello debug | `GPIO13` ↔ `GND` | modalità debug se inserito all'avvio |
 
 Ogni sonda ha il proprio bus 1-Wire, quindi non servono gli indirizzi delle DS18B20. VDD delle sonde a **3.3 V**, non a 5 V.
 
@@ -96,13 +97,20 @@ Il primo flash va fatto via USB. Gli aggiornamenti successivi possono passare vi
 
 I parametri principali sono nelle `substitutions` in testa a `multiprobe_thermal_monitor.yaml`:
 
+Parametri che dipendono dalla modalità:
+
+| Significato | Normale | Debug |
+|---|---|---|
+| ms tra due letture (minimo 1000, vedi sotto) | `sample_ms_normal: 3000` | `sample_ms_debug: 2000` |
+| letture tra due pubblicazioni | `publish_every_normal: 10` | `publish_every_debug: 1` |
+
+Parametri fissi:
+
 | Parametro | Default | Significato |
 |---|---|---|
-| `sample_ms_normal` / `sample_ms_debug` | `3000` / `2000` | ms tra due letture; minimo 1000 (vedi sotto) |
-| `publish_every_normal` / `publish_every_debug` | `10` / `1` | letture tra due pubblicazioni |
 | `window_size` | `10` | letture su cui si calcola la mediana |
-| `debug_pin` | `GPIO7` | pin del ponticello debug |
 | `probe_1_pin` … `probe_3_pin` | `GPIO4` … `GPIO6` | pin dati delle sonde |
+| `debug_pin` | `GPIO13` | pin del ponticello debug |
 | `led_brightness_ok` / `led_brightness_alert` | `8%` / `40%` | luminosità del LED |
 
 ## Struttura del repository

@@ -110,11 +110,11 @@ L'elettrolitico è polarizzato: `+` al `5V`, `−` al `GND`.
 
 ## [debug]
 
-Un ponticello su due pin tra `GPIO7` e `GND` sceglie la modalità all'avvio:
+Un ponticello su due pin tra `GPIO13` e `GND` sceglie la modalità all'avvio:
 
 - **scollegato**: modalità normale;
 - **inserito**: modalità debug, per verificare il cablaggio e sviluppare.
 
 Il pin ha il pull-up interno attivo, quindi non serve una resistenza. Il firmware legge il ponticello **solo all'avvio**: dopo averlo spostato bisogna riavviare la scheda.
 
-Non si usa `GPIO4` come negli altri progetti perché qui è la sonda 1. `GPIO7` è libero e non è un pin di strapping.
+`GPIO13` sta sulla stessa fila dell'header del pin `GND`, a due posizioni di distanza, ed è libero e non di strapping. Non è adiacente al `GND`: in mezzo c'è `3V3`. Per questo l'header del ponticello va sulla millefori con due fili corti, e non va chiuso direttamente sui pin del modulo, dove si rischierebbe di cortocircuitare `3V3`. Non si usa `GPIO4` come negli altri progetti perché qui è la sonda 1.

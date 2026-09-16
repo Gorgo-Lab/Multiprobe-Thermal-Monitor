@@ -15,7 +15,7 @@ connectors:
   ESP32:
     type: ESP32-S3 Super Mini
     subtype: alimentata da USB-C
-    pinlabels: [GND, GPIO4, GPIO5, GPIO6, GPIO7, '3V3', '5V']
+    pinlabels: [GND, GPIO4, GPIO5, GPIO6, GPIO13, '3V3', '5V']
     notes: |
       USB-C da caricatore: non si salda [alimentazione]
       cavo USB corto o spesso [cavo]
@@ -84,7 +84,7 @@ connectors:
     pinlabels: [A, B]
     notes: |
       inserito all'avvio = modalita' debug
-      letto solo al boot [debug]
+      su millefori, NON sui pin: 3V3 in mezzo [debug]
 
   C_BULK:
     type: Elettrolitico
@@ -186,7 +186,7 @@ cables:
     wirecount: 1
     gauge: 0.25 mm2
     colors: [WH]
-    notes: GPIO7 → ponticello
+    notes: GPIO13 → ponticello
 
   W18:
     wirecount: 1
@@ -276,7 +276,7 @@ connections:
     - C_BULK: ['-']
 
   -
-    - ESP32: [GPIO7]
+    - ESP32: [GPIO13]
     - W17: [1]
     - JP_DEBUG: [A]
 

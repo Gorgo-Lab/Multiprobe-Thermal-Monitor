@@ -44,9 +44,9 @@ substitutions:
   window_size: "10"
 
   # Ponticello verso GND = modalita' debug; scollegato = normale. Letto solo
-  # all'avvio: dopo averlo spostato serve un riavvio. Non GPIO4 come negli
-  # altri progetti: qui GPIO4 e' la sonda 1.
-  debug_pin: GPIO7
+  # all'avvio: dopo averlo spostato serve un riavvio. GPIO13 sta sulla stessa
+  # fila del GND (GND, 3V3, 13) e non e' un pin di strapping.
+  debug_pin: GPIO13
 
   # Un bus 1-Wire DEDICATO per ogni sonda, invece di un unico bus condiviso.
   # Ogni bus vuole la sua resistenza di pull-up da 4.7 kOhm verso 3V3.
