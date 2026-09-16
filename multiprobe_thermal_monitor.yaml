@@ -159,10 +159,28 @@ one_wire:
     id: probe_3_bus
     pin: ${probe_3_pin}
 
-# Diagnostica minima: dice se la board è viva e come sta la connessione.
-# Su questa scheda l'RSSI merita attenzione — girano esemplari con l'antenna
-# montata al contrario, che si manifestano proprio come segnale pessimo a
-# distanza ravvicinata.
+# Diagnostica: poche entita', tutte in categoria "diagnostic" in Home
+# Assistant (separate dalle temperature). Ognuna risponde a una domanda
+# precisa quando qualcosa non va:
+#   - uptime             si e' riavviata?
+#   - causa del reset    perche'? (brownout = alimentazione/cavo, panic = crash)
+#   - segnale WiFi       la connessione e' debole? (antenna, posizione)
+#   - letture fallite    il bus sta degradando prima di rompersi del tutto?
+#   - versione ESPHome   quale firmware gira dopo un aggiornamento OTA?
+debug:
+  # Serve solo per la causa del reset, pubblicata una volta all'avvio.
+  # "never": niente log periodici di heap e simili.
+  update_interval: never
+
+globals:
+  - id: read_errors
+    type: uint32_t
+    initial_value: '0'
+    # Letture grezze fallite (NaN) delle tre sonde dall'avvio. La mediana
+    # nasconde gli errori isolati: questo contatore li rende visibili, cosi'
+    # un bus che degrada si nota prima che la sonda smetta del tutto.
+    # Si azzera a ogni riavvio (niente scritture su flash).
+
 sensor:
   - platform: wifi_signal
     name: "WiFi signal"
@@ -170,6 +188,16 @@ sensor:
 
   - platform: uptime
     name: "Uptime"
+    update_interval: 60s
+
+  - platform: template
+    name: "Letture fallite"
+    lambda: 'return id(read_errors);'
+    update_interval: 60s
+    accuracy_decimals: 0
+    # total_increasing: HA gestisce da solo l'azzeramento dopo un riavvio.
+    state_class: total_increasing
+    entity_category: diagnostic
 
   # ---------------------------------------------------------------------
   # SONDE
@@ -192,6 +220,9 @@ sensor:
     one_wire_id: probe_1_bus
     name: "Sonda 1"
     update_interval: ${sample_interval}
+    # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
+    on_raw_value:
+      - lambda: 'if (isnan(x)) id(read_errors)++;'
     # 12 bit = 0.0625 °C di risoluzione, 750 ms di conversione. Il tempo di
     # conversione resta abbondantemente dentro sample_interval (3s).
     resolution: 12
@@ -211,6 +242,9 @@ sensor:
     one_wire_id: probe_2_bus
     name: "Sonda 2"
     update_interval: ${sample_interval}
+    # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
+    on_raw_value:
+      - lambda: 'if (isnan(x)) id(read_errors)++;'
     resolution: 12
     filters:
       - median:
@@ -223,6 +257,9 @@ sensor:
     one_wire_id: probe_3_bus
     name: "Sonda 3"
     update_interval: ${sample_interval}
+    # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
+    on_raw_value:
+      - lambda: 'if (isnan(x)) id(read_errors)++;'
     resolution: 12
     filters:
       - median:
@@ -234,6 +271,10 @@ sensor:
 text_sensor:
   - platform: version
     name: "ESPHome version"
+
+  - platform: debug
+    reset_reason:
+      name: "Causa ultimo riavvio"
 
 
 # Alza il flag di guasto che il modulino LED traduce in rosso lampeggiante.
