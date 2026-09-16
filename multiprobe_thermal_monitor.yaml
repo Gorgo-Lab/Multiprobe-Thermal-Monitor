@@ -20,7 +20,7 @@
 # bus gli indirizzi a 64 bit delle DS18B20 non servono: ESPHome li
 # auto-seleziona. L'associazione sonda/entità la decide il pin.
 #
-# Varianti di sviluppo/test: vedi bench/ (vuota per ora).
+# Strumenti di sviluppo/test: vedi bench/ (broker Mosquitto di debug).
 
 substitutions:
   device_name: multiprobe-thermal-monitor
@@ -43,6 +43,12 @@ substitutions:
   publish_every_debug: "1"
   window_size: "10"
 
+  # Dopo quanto dall'avvio una sonda che non ha mai pubblicato conta come
+  # guasta (LED rosso). Deve superare la prima pubblicazione in modalita'
+  # normale (sample_ms_normal * publish_every_normal = 30 s, piu' la
+  # conversione), altrimenti a ogni boot il LED darebbe un falso allarme.
+  probe_missing_after: "60s"
+
   # Ponticello verso GND = modalita' debug; scollegato = normale. Letto solo
   # all'avvio: dopo averlo spostato serve un riavvio. GPIO13 sta sulla stessa
   # fila del GND (GND, 3V3, 13) e non e' un pin di strapping.
@@ -63,7 +69,8 @@ substitutions:
 
   # Heartbeat molto tenue: sta acceso in una stanza h24, deve confermare che
   # la scheda e' viva senza fare da lucina notturna. Gli avvisi invece
-  # devono farsi notare.
+  # devono farsi notare. Valori lineari (gamma_correct 1.0 nel modulino):
+  # la percentuale e' la frazione reale di 255.
   led_brightness_ok: "8%"
   led_brightness_alert: "40%"
 
@@ -104,6 +111,12 @@ esphome:
           else:
             - logger.log: "NORMAL MODE: lettura ogni 3 s, pubblica ogni 30 s"
       - script.execute: sample_loop
+      # Da qui in poi una sonda senza nessun valore pubblicato e' un guasto:
+      # vedi il blocco interval in fondo al file.
+      - delay: ${probe_missing_after}
+      - globals.set:
+          id: probe_grace_over
+          value: 'true'
 
 binary_sensor:
   - platform: gpio
@@ -235,6 +248,12 @@ globals:
   - id: publish_every
     type: uint32_t
     initial_value: "${publish_every_normal}"
+
+  - id: probe_grace_over
+    type: bool
+    initial_value: 'false'
+    # Diventa true probe_missing_after dopo l'avvio. Un flag invece di un
+    # confronto con millis(), che ogni ~49 giorni ricomincia da zero.
 
   - id: read_errors
     type: uint32_t
@@ -404,20 +423,29 @@ text_sensor:
 # modulino non sa nulla di sonde (e non gli serve, il rosso dice CHE
 # qualcosa non va, non cosa — il dettaglio sta nei log e in HA).
 #
+# Una sonda e' guasta in due casi distinti:
+#
+#   - ha pubblicato NaN: sonda trovata all'avvio che poi ha smesso di
+#     rispondere. Il filtro median scarta i NaN dalla finestra e pubblica
+#     NaN solo se TUTTI e 10 i campioni lo sono (filter.cpp:51-57): il LED
+#     non si accende per un glitch occasionale, ma per una sonda muta per
+#     l'intera finestra.
+#   - non ha MAI pubblicato, passato probe_missing_after: sonda assente o
+#     morta gia' all'avvio. La ricerca sul bus avviene solo al boot; se non
+#     trova nulla il sensore resta senza indirizzo e update() esce senza
+#     leggere (one_wire.cpp:26-29, dallas_temp.cpp:40-41). Niente NaN,
+#     niente lettura fallita: senza questo caso il LED resterebbe bianco.
+#
 # Perche' has_state() e non solo isnan(): prima della prima pubblicazione lo
 # stato di un sensore E' NaN. Senza la guardia, per i primi 30s dopo ogni
-# boot il LED segnalerebbe un guasto su un impianto perfettamente sano.
-#
-# Cosa fa scattare davvero l'avviso: il filtro median scarta i NaN dalla
-# finestra e pubblica NaN solo se TUTTI e 10 i campioni lo sono
-# (filter.cpp:51-57). Quindi il LED non si accende per un glitch occasionale
-# sul bus, ma solo per una sonda muta per l'intera finestra — che e'
-# esattamente la condizione che vale la pena segnalare.
+# boot il LED segnalerebbe un guasto su un impianto perfettamente sano. Il
+# secondo caso aspetta probe_grace_over per lo stesso motivo.
 interval:
   - interval: 5s
     then:
       - lambda: |-
-          id(led_fault) =
-              (id(sonda_1).has_state() && isnan(id(sonda_1).state)) ||
-              (id(sonda_2).has_state() && isnan(id(sonda_2).state)) ||
-              (id(sonda_3).has_state() && isnan(id(sonda_3).state));
+          auto faulty = [](sensor::Sensor *s) {
+            if (s->has_state()) return std::isnan(s->state);
+            return id(probe_grace_over);
+          };
+          id(led_fault) = faulty(id(sonda_1)) || faulty(id(sonda_2)) || faulty(id(sonda_3));

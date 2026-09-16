@@ -13,7 +13,7 @@ Ogni sonda sta sul **proprio** bus 1-Wire, su un GPIO dedicato (`GPIO4`, `GPIO5`
 1-Wire nasce per far convivere più dispositivi sulla stessa linea, quindi il bus condiviso sarebbe l'uso "canonico". Qui però costa più di quanto rende:
 
 - **Niente indirizzi da configurare.** Con più sonde sullo stesso pin gli indirizzi a 64 bit diventano obbligatori: vanno letti dai log e incollati nel firmware. ESPHome sceglie da solo il dispositivo solo se sul bus ce n'è uno (`one_wire.cpp:22-35`).
-- **Sostituire una sonda è un'operazione solo fisica.** Con gli indirizzi, ogni sonda nuova richiederebbe di rileggere i log e riflashare.
+- **Sostituire una sonda è un'operazione solo fisica**: si stacca, si attacca e si riavvia la scheda, perché la ricerca sul bus avviene solo all'avvio. Con gli indirizzi, ogni sonda nuova richiederebbe di rileggere i log e riflashare.
 - **Un guasto resta confinato.** Una sonda che tiene la linea dati bassa blocca solo il proprio bus. Sul bus condiviso sparirebbero tutte e tre le letture.
 - **Ogni tratta è punto-punto**, quindi non c'è il problema delle riflessioni di un bus a stella.
 

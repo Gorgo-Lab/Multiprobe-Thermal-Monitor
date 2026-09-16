@@ -67,6 +67,12 @@ light:
     # 150 ms si trasformerebbero in una dissolvenza continua e la
     # distinzione lento/veloce — che qui porta l'informazione — sparirebbe.
     default_transition_length: 0s
+    # 1.0 obbligatorio: con il gamma di default (2.8) il valore inviato al
+    # LED e' luminosita'^2.8, quindi 8% diventa 0.22/255 = LED spento, e il
+    # "tutto ok" sarebbe indistinguibile da una scheda morta. Senza
+    # dissolvenze la correzione percettiva non serve: cosi' la percentuale
+    # impostata e' quella reale (8% = 20/255).
+    gamma_correct: 1.0
 
 globals:
   - id: led_fault

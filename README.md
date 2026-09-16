@@ -11,6 +11,7 @@ Firmware [ESPHome](https://esphome.io) per **ESP32-S3 Super Mini** che legge **3
 
 - La prima temperatura arriva **30 s dopo l'accensione**, quando la finestra di 10 campioni è piena.
 - La mediana scarta le letture errate occasionali del bus. Se una sonda non risponde per un'intera finestra, pubblica `NaN` e il LED passa a rosso.
+- Le sonde vengono cercate **solo all'avvio**: dopo averne collegata o sostituita una, riavviare la scheda. Una sonda assente all'avvio non pubblica nulla, nemmeno `NaN`; se dopo 60 s non ha ancora pubblicato, il LED passa a rosso.
 - Home Assistant trova le entità da solo tramite **MQTT discovery**: niente da configurare lato HA oltre all'integrazione MQTT.
 
 ### Modalità debug
@@ -46,7 +47,7 @@ Il contatore delle letture fallite conta gli errori che la mediana nasconde, e s
 | LED | Significato |
 |---|---|
 | ⚪ bianco, lampeggio lento | tutto ok |
-| 🔴 rosso, lampeggio veloce | WiFi assente, broker MQTT irraggiungibile o sonda guasta |
+| 🔴 rosso, lampeggio veloce | WiFi assente, broker MQTT irraggiungibile, sonda muta o assente all'avvio |
 | ⚫ spento | scheda senza alimentazione o bloccata |
 
 ## Hardware
@@ -93,6 +94,13 @@ uv run esphome logs multiprobe_thermal_monitor.yaml   # solo log
 
 Il primo flash va fatto via USB. Gli aggiornamenti successivi possono passare via WiFi (OTA).
 
+Per vedere i messaggi senza Home Assistant basta un broker Mosquitto di debug in Docker, con `mqtt_broker` in `secrets.yaml` impostato all'IP della macchina che lo esegue:
+
+```bash
+docker run -d --rm --name mosquitto -p 1883:1883 -v "$(pwd)/bench/mosquitto/config:/mosquitto/config:ro" eclipse-mosquitto:2
+docker exec -it mosquitto mosquitto_sub -v -t 'multiprobe-thermal-monitor/#'
+```
+
 ## Configurazione
 
 I parametri principali sono nelle `substitutions` in testa a `multiprobe_thermal_monitor.yaml`:
@@ -109,6 +117,7 @@ Parametri fissi:
 | Parametro | Default | Significato |
 |---|---|---|
 | `window_size` | `10` | letture su cui si calcola la mediana |
+| `probe_missing_after` | `60s` | dopo quanto dall'avvio una sonda che non ha mai pubblicato accende il LED rosso |
 | `probe_1_pin` … `probe_3_pin` | `GPIO4` … `GPIO6` | pin dati delle sonde |
 | `debug_pin` | `GPIO13` | pin del ponticello debug |
 | `led_brightness_ok` / `led_brightness_alert` | `8%` / `40%` | luminosità del LED |
@@ -120,7 +129,7 @@ Parametri fissi:
 | `multiprobe_thermal_monitor.yaml` | firmware da flashare |
 | `common/status_led.yaml` | modulo riutilizzabile per il LED di stato |
 | `DOCS/` | schema di cablaggio e note hardware |
-| `bench/` | varianti di test (vuota) |
+| `bench/` | strumenti di test: broker Mosquitto di debug |
 
 ## Scelte di progetto
 
