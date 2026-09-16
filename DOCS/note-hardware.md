@@ -107,3 +107,14 @@ L'elettrolitico è polarizzato: `+` al `5V`, `−` al `GND`.
 - La **banda sul cilindro** indica il **negativo**. Il `+` spesso non è stampato.
 - Il reoforo più lungo è il positivo, ma solo finché non si tagliano le gambe.
 - Montato al contrario si scalda, si gonfia e sfiata. A 5 V da caricatore non è pericoloso, ma il condensatore è da buttare.
+
+## [debug]
+
+Un ponticello su due pin tra `GPIO7` e `GND` sceglie la modalità all'avvio:
+
+- **scollegato**: modalità normale;
+- **inserito**: modalità debug, per verificare il cablaggio e sviluppare.
+
+Il pin ha il pull-up interno attivo, quindi non serve una resistenza. Il firmware legge il ponticello **solo all'avvio**: dopo averlo spostato bisogna riavviare la scheda.
+
+Non si usa `GPIO4` come negli altri progetti perché qui è la sonda 1. `GPIO7` è libero e non è un pin di strapping.

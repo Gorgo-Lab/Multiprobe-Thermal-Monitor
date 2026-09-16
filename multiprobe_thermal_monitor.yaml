@@ -1,10 +1,10 @@
 # Flagship — firmware principale (ESP32-S3 Super Mini + 3 sonde di
 # temperatura + pubblicazione MQTT verso Home Assistant).
 #
-# LOGICA: ogni ${sample_interval} le 3 sonde DS18B20 vengono lette nello
-# stesso ciclo. Ogni ${window_size} campioni viene pubblicata su MQTT la
-# MEDIANA della finestra — quindi una pubblicazione ogni
-# sample_interval × window_size. Home Assistant scopre le entità da solo via
+# LOGICA: le 3 sonde DS18B20 vengono lette insieme ogni 3 s; ogni 10 letture
+# (30 s) viene pubblicata su MQTT la MEDIANA delle ultime 10. Con il
+# ponticello debug su GND all'avvio: lettura ogni 2 s, pubblicazione a ogni
+# lettura, piu' i valori grezzi. Stessa logica, parametri diversi. Home Assistant scopre le entità da solo via
 # MQTT discovery (nessuna entità da dichiarare a mano nel suo
 # configuration.yaml).
 #
@@ -25,22 +25,28 @@
 substitutions:
   device_name: multiprobe-thermal-monitor
 
-  # Campionamento e pubblicazione.
+  # Campionamento e pubblicazione, in due modalita' scelte AL BOOT dal
+  # ponticello su debug_pin. La logica e' la stessa: cambiano solo i numeri.
   #
-  # sample_interval = ogni quanto si legge una sonda (NON quanto si
-  # pubblica). Limite fisico: a 12 bit la conversione della DS18B20 dura
-  # 750 ms, quindi sotto ~1s non si può scendere. E non solo: ESPHome
-  # programma la lettura con set_timeout(nome_sensore, ...) e un timeout
-  # con lo stesso nome CANCELLA quello pendente, quindi con un intervallo
-  # più corto della conversione la lettura non arriverebbe MAI e il
-  # sensore non pubblicherebbe nulla (non "meno spesso": nulla).
+  #                    normale   debug
+  #   lettura sonde    3 s       2 s
+  #   pubblica ogni    10 letture 1 lettura  (30 s / 2 s)
+  #   valori grezzi    no        si'
   #
-  # window_size = quanti campioni entrano nella mediana. La pubblicazione
-  # avviene ogni sample_interval × window_size, cioè 30s con questi valori:
-  # la temperatura è una grandezza lenta, pubblicare più spesso
-  # genererebbe solo traffico MQTT e storico HA senza informazione in più.
-  sample_interval: 3s
+  # La mediana e' sempre sulle ultime window_size letture.
+  #
+  # sample_ms minimo 1000: a 12 bit la conversione DS18B20 dura 750 ms, e con
+  # un intervallo piu' corto ogni lettura verrebbe annullata dalla successiva.
+  sample_ms_normal: "3000"
+  sample_ms_debug: "2000"
+  publish_every_normal: "10"
+  publish_every_debug: "1"
   window_size: "10"
+
+  # Ponticello verso GND = modalita' debug; scollegato = normale. Letto solo
+  # all'avvio: dopo averlo spostato serve un riavvio. Non GPIO4 come negli
+  # altri progetti: qui GPIO4 e' la sonda 1.
+  debug_pin: GPIO7
 
   # Un bus 1-Wire DEDICATO per ogni sonda, invece di un unico bus condiviso.
   # Ogni bus vuole la sua resistenza di pull-up da 4.7 kOhm verso 3V3.
@@ -78,6 +84,51 @@ packages:
 esphome:
   name: ${device_name}
   friendly_name: "Multiprobe Thermal Monitor"
+  on_boot:
+    priority: -100
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: debug_mode_sensor
+          then:
+            - globals.set:
+                id: debug_mode
+                value: 'true'
+            - globals.set:
+                id: sample_ms
+                value: "${sample_ms_debug}"
+            - globals.set:
+                id: publish_every
+                value: "${publish_every_debug}"
+            - logger.log: "DEBUG MODE: lettura ogni 2 s, pubblica ogni lettura + valori grezzi"
+          else:
+            - logger.log: "NORMAL MODE: lettura ogni 3 s, pubblica ogni 30 s"
+      - script.execute: sample_loop
+
+binary_sensor:
+  - platform: gpio
+    id: debug_mode_sensor
+    pin:
+      number: ${debug_pin}
+      mode: INPUT_PULLUP
+      inverted: true  # collegato a GND = debug
+    internal: true
+
+script:
+  # Ciclo di lettura: aggiorna le tre sonde insieme, poi aspetta sample_ms.
+  # Stesso schema di do_drain_cycle in esp32-tank-empty-controller: il valore
+  # e' un global letto a runtime, quindi il boot puo' cambiarlo.
+  - id: sample_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            lambda: 'return true;'
+          then:
+            - component.update: sonda_1
+            - component.update: sonda_2
+            - component.update: sonda_3
+            - delay: !lambda 'return id(sample_ms);'
 
 # Scheda: ESP32-S3 "Super Mini" di importazione, caratterizzata con esptool
 # nel repo ../esp32-S3-from-china (QFN56 rev v0.2, 4MB flash XMC, 2MB PSRAM
@@ -173,6 +224,18 @@ debug:
   update_interval: never
 
 globals:
+  # Parametri di modalita': inizializzati ai valori normali, sovrascritti al
+  # boot se il ponticello debug e' inserito.
+  - id: debug_mode
+    type: bool
+    initial_value: 'false'
+  - id: sample_ms
+    type: uint32_t
+    initial_value: "${sample_ms_normal}"
+  - id: publish_every
+    type: uint32_t
+    initial_value: "${publish_every_normal}"
+
   - id: read_errors
     type: uint32_t
     initial_value: '0'
@@ -206,11 +269,14 @@ sensor:
   # l'indirizzo: essendo l'unico device sul bus, viene auto-selezionato.
   # L'associazione sonda/entita' la decide il pin a cui l'hai collegata.
   #
-  # Le 3 sonde condividono lo stesso update_interval, quindi ESPHome le
-  # aggiorna nello stesso ciclo. Qui i bus sono indipendenti, quindi le tre
-  # conversioni sono davvero parallele (non si contendono la linea) e anche
-  # le finestre della mediana restano allineate: le tre temperature
-  # pubblicate si riferiscono sempre allo stesso intervallo di tempo.
+  # Le letture le comanda lo script sample_loop (update_interval: never), che
+  # aggiorna le tre sonde nello stesso ciclo: le finestre della mediana
+  # restano allineate e i tre valori pubblicati coprono lo stesso intervallo.
+  #
+  # Filtri: la mediana si aggiorna a ogni lettura (send_every: 1); il filtro
+  # lambda successivo lascia passare un valore ogni publish_every letture.
+  # In modalita' normale il primo valore esce alla 10a lettura, quindi a
+  # finestra piena.
   #
   # Se una sonda non compare nei log, il problema e' nel cablaggio di QUELLA
   # tratta (pull-up assente sul suo pin, massa, o sonda guasta) — le altre
@@ -219,53 +285,109 @@ sensor:
     id: sonda_1
     one_wire_id: probe_1_bus
     name: "Sonda 1"
-    update_interval: ${sample_interval}
-    # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
-    on_raw_value:
-      - lambda: 'if (isnan(x)) id(read_errors)++;'
-    # 12 bit = 0.0625 °C di risoluzione, 750 ms di conversione. Il tempo di
-    # conversione resta abbondantemente dentro sample_interval (3s).
+    update_interval: never
     resolution: 12
+    on_raw_value:
+      # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
+      - lambda: 'if (isnan(x)) id(read_errors)++;'
+      - if:
+          condition:
+            lambda: 'return id(debug_mode);'
+          then:
+            - sensor.template.publish:
+                id: sonda_1_raw
+                state: !lambda 'return x;'
     filters:
-      # send_first_at uguale a window_size: la prima pubblicazione avviene
-      # solo a finestra piena. In cambio di ~30s di attesa dopo il boot, il
-      # primo valore che HA registra e' gia' filtrato come tutti gli altri,
-      # invece di essere una lettura singola indistinguibile dalle
-      # successive nello storico.
       - median:
           window_size: ${window_size}
-          send_every: ${window_size}
-          send_first_at: ${window_size}
+          send_every: 1
+          send_first_at: 1
+      - lambda: |-
+          static uint32_t n = 0;
+          if (++n % id(publish_every) != 0) return {};
+          return x;
+
+  - platform: template
+    id: sonda_1_raw
+    name: "Sonda 1 grezzo"
+    # Pubblicato solo in modalita' debug; in normale resta vuoto.
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: never
+    entity_category: diagnostic
 
   - platform: dallas_temp
     id: sonda_2
     one_wire_id: probe_2_bus
     name: "Sonda 2"
-    update_interval: ${sample_interval}
-    # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
-    on_raw_value:
-      - lambda: 'if (isnan(x)) id(read_errors)++;'
+    update_interval: never
     resolution: 12
+    on_raw_value:
+      # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
+      - lambda: 'if (isnan(x)) id(read_errors)++;'
+      - if:
+          condition:
+            lambda: 'return id(debug_mode);'
+          then:
+            - sensor.template.publish:
+                id: sonda_2_raw
+                state: !lambda 'return x;'
     filters:
       - median:
           window_size: ${window_size}
-          send_every: ${window_size}
-          send_first_at: ${window_size}
+          send_every: 1
+          send_first_at: 1
+      - lambda: |-
+          static uint32_t n = 0;
+          if (++n % id(publish_every) != 0) return {};
+          return x;
+
+  - platform: template
+    id: sonda_2_raw
+    name: "Sonda 2 grezzo"
+    # Pubblicato solo in modalita' debug; in normale resta vuoto.
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: never
+    entity_category: diagnostic
 
   - platform: dallas_temp
     id: sonda_3
     one_wire_id: probe_3_bus
     name: "Sonda 3"
-    update_interval: ${sample_interval}
-    # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
-    on_raw_value:
-      - lambda: 'if (isnan(x)) id(read_errors)++;'
+    update_interval: never
     resolution: 12
+    on_raw_value:
+      # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
+      - lambda: 'if (isnan(x)) id(read_errors)++;'
+      - if:
+          condition:
+            lambda: 'return id(debug_mode);'
+          then:
+            - sensor.template.publish:
+                id: sonda_3_raw
+                state: !lambda 'return x;'
     filters:
       - median:
           window_size: ${window_size}
-          send_every: ${window_size}
-          send_first_at: ${window_size}
+          send_every: 1
+          send_first_at: 1
+      - lambda: |-
+          static uint32_t n = 0;
+          if (++n % id(publish_every) != 0) return {};
+          return x;
+
+  - platform: template
+    id: sonda_3_raw
+    name: "Sonda 3 grezzo"
+    # Pubblicato solo in modalita' debug; in normale resta vuoto.
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: never
+    entity_category: diagnostic
   # ---------------------------------------------------------------------
 
 text_sensor:
