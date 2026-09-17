@@ -12,6 +12,7 @@ Firmware [ESPHome](https://esphome.io) per **ESP32-S3 Super Mini** che legge **3
 - La prima temperatura arriva **30 s dopo l'accensione**, quando la finestra di 10 campioni è piena.
 - La mediana scarta le letture errate occasionali del bus. Se una sonda non risponde per un'intera finestra, pubblica `NaN` e il LED passa a rosso.
 - Le sonde vengono cercate **solo all'avvio**: dopo averne collegata o sostituita una, riavviare la scheda. Una sonda assente all'avvio non pubblica nulla, nemmeno `NaN`; se dopo 60 s non ha ancora pubblicato, il LED passa a rosso.
+- Se una sonda non pubblica per **90 s**, Home Assistant la mostra come *non disponibile* invece di tenere l'ultima temperatura ricevuta.
 - Home Assistant trova le entità da solo tramite **MQTT discovery**: niente da configurare lato HA oltre all'integrazione MQTT.
 
 ### Modalità debug
@@ -118,6 +119,7 @@ Parametri fissi:
 |---|---|---|
 | `window_size` | `10` | letture su cui si calcola la mediana |
 | `probe_missing_after` | `60s` | dopo quanto dall'avvio una sonda che non ha mai pubblicato accende il LED rosso |
+| `probe_expire_after` | `90s` | dopo quanto senza aggiornamenti Home Assistant mostra una sonda come non disponibile |
 | `probe_1_pin` … `probe_3_pin` | `GPIO4` … `GPIO6` | pin dati delle sonde |
 | `debug_pin` | `GPIO13` | pin del ponticello debug |
 | `led_brightness_ok` / `led_brightness_alert` | `8%` / `40%` | luminosità del LED |

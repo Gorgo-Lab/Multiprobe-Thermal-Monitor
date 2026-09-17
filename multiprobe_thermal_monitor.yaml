@@ -49,6 +49,15 @@ substitutions:
   # conversione), altrimenti a ogni boot il LED darebbe un falso allarme.
   probe_missing_after: "60s"
 
+  # Dopo quanto senza aggiornamenti Home Assistant mostra una sonda come
+  # "non disponibile" (expire_after MQTT). Senza, una sonda muta o assente
+  # all'avvio lascerebbe in HA l'ultima temperatura per sempre: il broker la
+  # conserva (retain) e la rimanda a ogni nuova connessione. 90 s = tre
+  # pubblicazioni mancate in modalita' normale; deve restare sopra
+  # sample_ms_normal * publish_every_normal, o le entita' lampeggerebbero
+  # tra disponibile e non disponibile.
+  probe_expire_after: "90s"
+
   # Ponticello verso GND = modalita' debug; scollegato = normale. Letto solo
   # all'avvio: dopo averlo spostato serve un riavvio. GPIO13 sta sulla stessa
   # fila del GND (GND, 3V3, 13) e non e' un pin di strapping.
@@ -63,8 +72,8 @@ substitutions:
   probe_3_pin: GPIO6
 
   # LED RGB onboard WS2812 (condiviso col LED rosso della scheda). Pin
-  # confermato sulla Super Mini, vedi ../esp32-S3-from-china. Lo pilota il
-  # modulino common/status_led.yaml come indicatore di stato.
+  # verificato sulla Super Mini. Lo pilota il modulino
+  # common/status_led.yaml come indicatore di stato.
   rgb_led_pin: GPIO48
 
   # Heartbeat molto tenue: sta acceso in una stanza h24, deve confermare che
@@ -129,8 +138,7 @@ binary_sensor:
 
 script:
   # Ciclo di lettura: aggiorna le tre sonde insieme, poi aspetta sample_ms.
-  # Stesso schema di do_drain_cycle in esp32-tank-empty-controller: il valore
-  # e' un global letto a runtime, quindi il boot puo' cambiarlo.
+  # Il valore e' un global letto a runtime, quindi il boot puo' cambiarlo.
   - id: sample_loop
     mode: single
     then:
@@ -144,8 +152,8 @@ script:
             - delay: !lambda 'return id(sample_ms);'
 
 # Scheda: ESP32-S3 "Super Mini" di importazione, caratterizzata con esptool
-# nel repo ../esp32-S3-from-china (QFN56 rev v0.2, 4MB flash XMC, 2MB PSRAM
-# quad, USB nativo USB-Serial/JTAG senza bridge UART esterno).
+# (QFN56 rev v0.2, 4MB flash XMC, 2MB PSRAM quad, USB nativo
+# USB-Serial/JTAG senza bridge UART esterno).
 # PSRAM non dichiarata di proposito: qui non serve a nulla e costa RAM
 # interna per il mapping.
 esp32:
@@ -297,6 +305,9 @@ sensor:
   # In modalita' normale il primo valore esce alla 10a lettura, quindi a
   # finestra piena.
   #
+  # expire_after: se una sonda smette di pubblicare, dopo probe_expire_after
+  # Home Assistant la mostra "non disponibile" invece dell'ultimo valore.
+  #
   # Se una sonda non compare nei log, il problema e' nel cablaggio di QUELLA
   # tratta (pull-up assente sul suo pin, massa, o sonda guasta) — le altre
   # due continuano a funzionare, ed e' proprio il vantaggio dei bus separati.
@@ -306,6 +317,7 @@ sensor:
     name: "Sonda 1"
     update_interval: never
     resolution: 12
+    expire_after: ${probe_expire_after}
     on_raw_value:
       # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
       - lambda: 'if (isnan(x)) id(read_errors)++;'
@@ -342,6 +354,7 @@ sensor:
     name: "Sonda 2"
     update_interval: never
     resolution: 12
+    expire_after: ${probe_expire_after}
     on_raw_value:
       # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
       - lambda: 'if (isnan(x)) id(read_errors)++;'
@@ -378,6 +391,7 @@ sensor:
     name: "Sonda 3"
     update_interval: never
     resolution: 12
+    expire_after: ${probe_expire_after}
     on_raw_value:
       # Conta le letture fallite PRIMA della mediana, che le nasconderebbe.
       - lambda: 'if (isnan(x)) id(read_errors)++;'
